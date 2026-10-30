@@ -23,6 +23,7 @@ import {
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { claudeUsageReader } from "./claudeUsage.ts";
+import { makeClaudeUsageBackoff } from "./claudeUsageBackoff.ts";
 import { makeClaudeScopedLimitNames } from "../claudeUsageLimits.ts";
 import * as ClaudeResetCredits from "../claudeResetCredits.ts";
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
@@ -201,9 +202,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     // account-specific probes never share auth metadata across instances.
     // A transient miss may reuse the last account once, but its usage windows keep their age.
     const lastGoodCapabilities = yield* Ref.make<ClaudeCapabilitiesProbe | undefined>(undefined);
+    const usageBackoff = yield* makeClaudeUsageBackoff;
     const capabilitiesProbeCache = yield* Cache.makeWith(
       () =>
-        probeClaudeCapabilities(effectiveConfig, processEnv, stateDir).pipe(
+        usageBackoff.shouldRead.pipe(
+          Effect.flatMap((includeUsage) =>
+            probeClaudeCapabilities(effectiveConfig, processEnv, stateDir, includeUsage).pipe(
+              Effect.tap((capabilities) =>
+                includeUsage ? usageBackoff.record(capabilities.usage !== undefined) : Effect.void,
+              ),
+            ),
+          ),
           Effect.flatMap((capabilities) =>
             ClaudeResetCredits.readClaudeOrganizationId(accountConfigPath).pipe(
               Effect.map((workspaceId) => ({
