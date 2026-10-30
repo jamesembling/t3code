@@ -725,7 +725,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     it.effect.skipIf(windowsHost)(
       state === "signed-out"
         ? "shows Claude usage on the first refresh after signing back in"
-        : "retries Claude usage on the first refresh after a failed usage read",
+        : "waits out the back-off before retrying Claude usage after a failed read",
       () =>
         Effect.gen(function* () {
           const fixture = yield* makeClaudeCacheFixture(state);
@@ -739,6 +739,11 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
           }
 
           yield* fixture.recover;
+          if (state === "usage-failed") {
+            const cooling = yield* fixture.refresh;
+            expect(cooling.usageLimits?.unavailable?.reason).toBe("probeFailed");
+            yield* TestClock.adjust("5 minutes");
+          }
           const after = yield* fixture.refresh;
           expect(after.auth.status).toBe("authenticated");
           expect(after.usageLimits?.unavailable).toBeUndefined();
