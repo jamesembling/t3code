@@ -208,8 +208,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
         usageBackoff.shouldRead.pipe(
           Effect.flatMap((includeUsage) =>
             probeClaudeCapabilities(effectiveConfig, processEnv, stateDir, includeUsage).pipe(
-              Effect.tap((capabilities) =>
-                includeUsage ? usageBackoff.record(capabilities.usage !== undefined) : Effect.void,
+              Effect.flatMap((capabilities) =>
+                includeUsage
+                  ? usageBackoff
+                      .record(
+                        capabilities.usage && capabilities.usageCheckedAt
+                          ? {
+                              usage: capabilities.usage,
+                              usageCheckedAt: capabilities.usageCheckedAt,
+                            }
+                          : undefined,
+                      )
+                      .pipe(Effect.as(capabilities))
+                  : usageBackoff.lastReading.pipe(
+                      Effect.map((reading) =>
+                        reading ? { ...capabilities, ...reading } : capabilities,
+                      ),
+                    ),
               ),
             ),
           ),
@@ -285,7 +300,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           ),
           Effect.tap((provider) =>
             provider.auth.status === "unauthenticated"
-              ? Cache.invalidateAll(capabilitiesProbeCache)
+              ? Cache.invalidateAll(capabilitiesProbeCache).pipe(Effect.andThen(usageBackoff.reset))
               : Effect.void,
           ),
           Effect.map(stampIdentity),
@@ -375,6 +390,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
         Effect.gen(function* () {
           const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
           yield* Cache.invalidateAll(capabilitiesProbeCache);
+          yield* usageBackoff.reset;
           const refreshed = yield* snapshot.refresh;
           const after = refreshed.usageLimits?.checkedAt;
           if (
